@@ -1418,53 +1418,9 @@ MAVLink 只定义了通信协议，并没有规定 PX4 应该如何组织自己�
    > | `mavlink_command_sender.cpp` | MAVLink 命令发送相关功能                   |
    > | `mavlink_messages.cpp`       | MAVLink 消息及数据流相关的辅助管理         |
 
-##### 结合项目，应该重点研究哪些部分
-
-目前负责 PX4 无人机控制开发和 QGC 数据显示，未来还需要传输无线供电设备的数据。
-
-建议按照下面的顺序研究，而不是把整个目录中的文件全部看一遍。
-
-| 优先级 | 源码                         | 研究目标                             |
-| ------ | ---------------------------- | ------------------------------------ |
-| 1      | `mavlink_main.cpp`           | 理解实例、通信链路和模块整体运行机制 |
-| 2      | `streams/`                   | 理解 PX4 如何向 QGC 发送数据         |
-| 3      | `mavlink_receiver.cpp`       | 理解 PX4 如何接收并处理 QGC 消息     |
-| 4      | `mavlink_messages.cpp`       | 理解消息与数据流的管理关系           |
-| 5      | `mavlink_command_sender.cpp` | 理解 PX4 如何发送 MAVLink 命令       |
-| 6      | `mavlink_mission.cpp`        | 理解航点任务传输机制                 |
-
-尤其是 `streams/`，我建议你下一步就从它入手。
-
-做一个小练习：
-
-在 PX4 工程根目录执行：
-
-```
-# 查看 Stream 目录
-ls src/modules/mavlink/streams
-
-# 搜索 ATTITUDE 对应的数据流实现
-grep -R -n "MavlinkStreamAttitude" \
-    src/modules/mavlink
-```
-
-找到对应文件后，重点观察三个问题：
-
-1. 它订阅了哪个 uORB Topic？
-2. 它在哪里构造 MAVLink 消息？
-3. 它通过什么接口把消息发送出去？
-
-当你真正理解这个过程后，就能把之前学习的 uORB、MAVLink XML、msgid、Payload、MAVLink 实例串联起来了。
-
-而且这条路线与你后续的无线供电数据开发直接相关：你可以参考现有 Stream 的实现方式，将无线供电模块发布的电压、电流、功率和效率数据通过自定义 MAVLink 消息发送到 QGC。
+### 自定义消息
 
 
-
-
-
-1. 创建实例函数的返回值类型为类引用
-   1. 按值返回会额外调用赋值构造函数导致创建多个实例
-   2. 按地址返回可以修改实例指针指向的对象
 
 
 

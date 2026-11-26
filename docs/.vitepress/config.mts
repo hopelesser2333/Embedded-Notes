@@ -46,7 +46,21 @@ export default defineConfig({
           items: [
             {
               text: 'MAVLink',
-              link: '/px4/mavlink/'
+              collapsed: false,
+              items: [
+                {
+                  text: 'MAVLink 概览',
+                  link: '/px4/mavlink/'
+                },
+                {
+                  text: 'MAVLink 协议与 PX4 外部通信',
+                  link: '/px4/mavlink/MAVLINK'
+                },
+                {
+                  text: 'MAVLink 2 和 XML',
+                  link: '/px4/mavlink/MAVLInk XML 结构和自定义'
+                }
+              ]
             },
             {
               text: 'uORB',
