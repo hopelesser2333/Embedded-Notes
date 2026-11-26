@@ -268,7 +268,7 @@ MAVLink 1 和 MAVLink 2 是协议版本，而这里的 `<version>` 是方言定�
   + `<enum>`：一个枚举类型。
   + `<entry>`：枚举中的一个具体取值。
 
-<img src="D:/Typora/Note/MAVLINK/assets/image-20261116205110570.png" alt="image-20261116205110570" style="zoom:67%;" />
+<img src="./assets/image-20261116205110570.png" alt="image-20261116205110570" style="zoom:67%;" />
 
 1. #####  `<enum>` **标签**
 
