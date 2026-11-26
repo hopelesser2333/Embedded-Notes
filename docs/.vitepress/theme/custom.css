@@ -1,0 +1,63 @@
+﻿/* 仅作用于首页 */
+:root {
+  --home-background-image: url('/Embedded-Notes/images/maier.jpg');
+}
+
+/* 首页整体背景：增加深色遮罩 */
+body:has(.VPHome) {
+  background-image:
+    linear-gradient(
+      rgba(0, 0, 0, 0.42),
+      rgba(0, 0, 0, 0.42)
+    ),
+    var(--home-background-image);
+
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* 首页内容区域透明 */
+body:has(.VPHome) .VPHome,
+body:has(.VPHome) .VPHero {
+  background: transparent;
+}
+
+/* Hero 标题与介绍：提高对比度 */
+body:has(.VPHome) .VPHero .name,
+body:has(.VPHome) .VPHero .text,
+body:has(.VPHome) .VPHero .tagline {
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
+}
+
+/* Features 卡片：保持浅色半透明 */
+body:has(.VPHome) .VPFeature {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+/* Features 卡片文字 */
+body:has(.VPHome) .VPFeature .title,
+body:has(.VPHome) .VPFeature .details {
+  color: #303030;
+}
+
+/* 首页导航栏 */
+body:has(.VPHome) .VPNavBar {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px);
+}
+
+/* 首页页脚 */
+body:has(.VPHome) .VPFooter {
+  background: transparent;
+}
+
+/* 暗色主题：首页顶部导航栏 */
+html.dark body:has(.VPHome) .VPNavBar {
+  background: rgba(25, 25, 28, 0.88);
+  backdrop-filter: blur(10px);
+}
