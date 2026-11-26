@@ -1,0 +1,1470 @@
+# PX4 二次开发_V3(外部通信)
+
+参考文献：
+
+[1] PX4 Development Team. Hardware Integration[EB/OL]. PX4 Guide[2026-10-21]. https://docs.px4.io/main/en/hardware/.
+
+[2] 张培田, 韩意新, 赵志俊, 陈永亮. PX4系统飞控开发指南——基于无人固定翼飞行器[M]. 西安: 西北工业大学出版社, 2024.
+
+[3] MAVLink Development Team. MAVLink Developer Guide[EB/OL]. [2026-11-18]. https://mavlink.io/en/
+
+
+
+## PX4系统的外部通信
+
+PX4 系统与外部通采用的通信协议是 Mavlink 协议，所谓的外部主要是指地面站。
+
+在 PX4 系统中 Mavlink 模块主要是由两部分组成：
+
+1. >  一部分是由 Mavlink 官方维护的库，其通过 git 子模块方式集成到 PX4系统中，库工具位于`./src/modules/mavlink/mavlink ` 子目录中。
+   >
+   >  Mavlink 库提供了底层通信协议（所谓协议就是按照特定的格式来组织数据），包括Mavlink 消息的定义、解析、打包和发送等功能。这一部分是**底层 Mavlink模块**
+
+2. > 另一部分是由PX4 系统维护的Mavlink 模块，其源码目录为`./src/modules/mavlink` ,它提供了该模块的使用命令，模块配置参数，被称为上层 **Mavlink 模块**
+
+Mavlink 模块接收和发送是并行的：
+
+1. **飞控系统作为发送端**：px4系统支持通过无线电台串口、USB接口、网络接口传输Mavlink消息。
+
+   > 项地面站发送无人机当前状态、姿态、速度等信息。
+   >
+   > 以1 Hz 的固定频率发送系统心跳包，用于确定地面站与无人机系统的连接是否有效。
+   >
+   > 上层 Mavlink 模块定期从uORB 主题获取待发送的数据，并填充至对应的 Mavlink 协议数据结构体中。
+   >
+   > 底层Mavlink 模块在接收到数据后，会按照协议要求打包，并通过硬件传输接口将消息发送给地面站。
+
+2. **飞控系统作为接收端**：
+
+   > 用于从地面站接收飞控锁定/解锁、飞行状态切换，飞行任务航迹点上传等待定指令或者航线等信息。
+   >
+   > 上层Mavlink 模块负责监视硬件传输接口对应的驱动文件，接收到数据后调用底层 Mavlink 模块提供的函数接口进行消息解析
+   >
+   > 部分消息是在上层Mavlink 模块中直接处理，大部分情况下是将消息数据通过对应的 uORB 主题发布出去，共需要的应用自行处理。
+
+### PX4 协议、模块常见概念
+
+1. Mavlink 消息
+
+   > Mavlink 协议传输的基本单位是消息帧。
+   >
+   > 每一条消息具有唯一的编号，称为消息ID，消息ID一般以宏定义形式给出。
+   >
+   > 每条Mavlink消息还与一个源码文件对应：以标准消息“HEARTBEAT（系统心跳）”为例，该消息一般用于判断地面站和飞控系统连接是否正常。其对应的源文件为：`build/px4_fmu-v5_default/mavlink/minimal/mavlink_msg_heartbeat.h` 。源文件中包含Mavlink 消息的消息ID、消息结构体定义、解析/发送等公共调用函数等内容。
+
+2. Mavlink 实例
+
+   > MAVLink 实例不是一个普通的 PX4 应用程序实例，而是一个独立的 MAVLink 通信端点（Communication Endpoint）。
+   >
+   > 它代表一条相对独立的 MAVLink 通信链路，拥有自己的通信设备、配置参数、收发状态以及 MAVLink 协议处理上下文。假设你的 Pixhawk 4 飞控连接了三个设备：
+   >
+   > - USB：连接 QGroundControl（QGC）。
+   >
+   > + TELEM1：连接伴飞计算机。
+   > + TELEM2：连接另一个 MAVLink 设备。
+   >
+   > 这三条链路都可以运行 MAVLink 协议。
+   >
+   > PX4 需要分别管理这些通信链路，因此可以启动多个 MAVLink 实例：
+   >
+   > + 三个实例运行的是同一套 MAVLink 模块代码。
+   > + 每个实例可以绑定不同的串口或 UDP 端口。
+   > + 每个实例可以有自己的发送速率、流配置和通信状态。
+   > + 它们可以同时运行，互不需要共用同一条物理通信链路。
+   >
+   > 因此，实例可以理解为：同一个 MAVLink 模块管理的多个独立通信对象。
+
+3. Mavlink 流 
+
+   > Mavlink 消息在底层模块称为消息帧，而在上层模块中，Mavlink消息与某个功能对应，称为消息流。
+   >
+   > 用户在新建Mavlink实例时，可以为其指定流模式，就是定义了一个可发送的流以及对应的速率限制。
+
+4. Mavlink 消息分类
+
+   > - 普通数值数据：PX4系统向地面站发送的无人机姿态，高度等数据
+   >
+   > - 命令类数据：通常用户通过地面发送的注入“切换飞行模式”“起飞”“解锁”“飞行前校准”等命令
+   > - 模块专用数据：通过地面站修改配置参数，规划飞行任务，从PX4系统下载飞行日志，NSH终端专用模块功能
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### PX4项目是如何使用mavlink的
+
+
+
+#### px4 将 mavlink仓库作为一个子仓库添加进了自己的工程
+
+mavlink仓库地址：[GitHub - mavlink/mavlink: Marshalling / communication library for drones. · GitHub](https://github.com/mavlink/mavlink)
+
+其目录结构如下：
+
+<img src="./assets/image-20261112164207716.png" alt="image-20261112164207716" style="zoom: 80%;" />
+
+PX4工程中，src/modules/mavlink路径下包含了此mavlink仓库
+
+| <img src="./assets/image-20261112165420495.png" alt="image-20261112165420495" style="zoom:67%;" /> | <img src="./assets/image-20261112165558966.png" alt="image-20261112165558966" style="zoom: 67%;" /> |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+1. `src/modules/mavlink/mavlink/` 是一个独立的 MAVLink 官方仓库，它包含 MAVLink 工具链所需的代码和资源，因此可以说它是 PX4 集成的 MAVLink 工具链仓库。
+2. `src/modules/mavlink/` 则是 PX4 自己实现的 MAVLink 模块，负责把 MAVLink 协议接入 PX4 飞控系统。
+3. 两者虽然目录名称相同，但职责完全不同：前者提供协议定义和生成工具，后者负责实际通信、数据收发和 PX4 内部功能对接。
+
+重点看三个目录：
+
+| 目录/文件              | 作用                                         |
+| ---------------------- | -------------------------------------------- |
+| `message_definitions/` | 存放 MAVLink XML 消息定义，例如 `common.xml` |
+| `pymavlink/`           | 包含 Python 实现及 MAVLink 代码生成相关工具  |
+| `mavgenerate.py`       | MAVLink 代码生成相关的入口脚本               |
+
+#### 底层 Mavlink 模块
+
+底层Mavlink 由 MAVLink 官方库和工具链以及通过工具链生成的库共同组成。
+
+底层 Mavlink 模块是一个只有头文件组成的轻量级信息集库。PX4 系统目前使用的 MAVLink 版本是 V2.0，在子目录 ./build/XXX/mavlink中定义了此版本协议所有的头文件。
+
+在``/home/zachery/PX4-Autopilot/build/px4_fmu-v5_default/mavlink  ``路径下（不同构建对象的mavlink上级目录为对应的构建对象）`./commom `和` ./development` 子目录中以字符串 “`mavlink_msg_`”开头的每一个头文件都对应了一条MAVLink 的消息。
+
+| ![image-20261117212819773](./assets/image-20261117212819773.png) | ![image-20261117212701584](./assets/image-20261117212701584.png) |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+
+> 右图是MAVLink工具链路径：/home/zachery/PX4-Autopilot/src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml
+
+##### MAVLink 消息帧定义
+
+``build/px4_fmu-v5_default/mavlink/mavlink_types.h`` 源码文件中定义了MAVL ink 消息帧的具体格式。
+
+```c
+MAVPACKED(
+typedef struct __mavlink_message {
+	uint16_t checksum;      ///< sent at end of packet
+	uint8_t magic;          ///< protocol magic marker
+	uint8_t len;            ///< Length of payload
+	uint8_t incompat_flags; ///< flags that must be understood
+	uint8_t compat_flags;   ///< flags that can be ignored if not understood
+	uint8_t seq;            ///< Sequence of packet
+	uint32_t sysid;         ///< ID of message sender system/aircraft
+	uint8_t compid;         ///< ID of the message sender component
+	uint32_t msgid:24;      ///< ID of message in payload
+	uint64_t payload64[(MAVLINK_MAX_PAYLOAD_LEN+MAVLINK_NUM_CHECKSUM_BYTES+7)/8];
+	uint8_t ck[2];          ///< incoming checksum bytes
+	uint8_t signature[MAVLINK_SIGNATURE_BLOCK_LEN];
+	uint32_t target_sysid;  ///< extended target system ID, valid only when (incompat_flags & MAVLINK_IFLAG_TARGET32)
+}) mavlink_message_t;
+```
+
+
+
+
+
+以标准消息飞机姿态 “ATTITUDE”为例。
+
+通过mavgen 根据消息的xml文件生成对应的消息源文件`.h`文件
+
+消息路径：`src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml`
+
+```xml
+    <message id="30" name="ATTITUDE">
+      <description>The attitude in the aeronautical frame (right-handed, Z-down, Y-right, X-front, ZYX, intrinsic).</description>
+      <field type="uint32_t" name="time_boot_ms" units="ms">Timestamp (time since system boot).</field>
+      <field type="float" name="roll" units="rad">Roll angle (-pi..+pi)</field>
+      <field type="float" name="pitch" units="rad">Pitch angle (-pi..+pi)</field>
+      <field type="float" name="yaw" units="rad">Yaw angle (-pi..+pi)</field>
+      <field type="float" name="rollspeed" units="rad/s">Roll angular speed</field>
+      <field type="float" name="pitchspeed" units="rad/s">Pitch angular speed</field>
+      <field type="float" name="yawspeed" units="rad/s">Yaw angular speed</field>
+    </message>
+```
+
+
+
+消息结构体源码路径：`/home/zachery/PX4-Autopilot/build/px4_fmu-v5_default/mavlink/common/mavlink_msg_altitude.h`
+
+```c
+typedef struct __mavlink_attitude_t {
+ uint32_t time_boot_ms; /*< [ms] Timestamp (time since system boot).*/
+ float roll; /*< [rad] Roll angle (-pi..+pi)*/
+ float pitch; /*< [rad] Pitch angle (-pi..+pi)*/
+ float yaw; /*< [rad] Yaw angle (-pi..+pi)*/
+ float rollspeed; /*< [rad/s] Roll angular speed*/
+ float pitchspeed; /*< [rad/s] Pitch angular speed*/
+ float yawspeed; /*< [rad/s] Yaw angular speed*/
+} mavlink_attitude_t;
+```
+
+
+
+##### 消息发送
+
+以标准消息飞机姿态 “ATTITUDE”为例。
+
+通常情况下,上层 Mavlink 模块会调用形如 “`mavlink_msg_xxx_send_struct`”的函数发送MavLink消息。
+
+```c
+static inline void mavlink_msg_attitude_send(mavlink_channel_t chan, uint32_t time_boot_ms, float roll, float pitch, float yaw, float rollspeed, float pitchspeed, float yawspeed)
+{
+    mavlink_attitude_t packet;
+    packet.time_boot_ms = time_boot_ms;
+    packet.roll = roll;
+    packet.pitch = pitch;
+    packet.yaw = yaw;
+    packet.rollspeed = rollspeed;
+    packet.pitchspeed = pitchspeed;
+    packet.yawspeed = yawspeed;
+
+    _mav_finalize_message_chan_send(chan, MAVLINK_MSG_ID_ATTITUDE, (const char *)&packet, MAVLINK_MSG_ID_ATTITUDE_MIN_LEN, MAVLINK_MSG_ID_ATTITUDE_LEN, MAVLINK_MSG_ID_ATTITUDE_CRC);
+
+}
+```
+
+其中：
+
+- 参数 `mavlink_channel_t` 表示 Mavlink 通道，用于区分不同的Mavlink实例；
+- 参数 ``time_boot_ms`` 用于给Mavlink 有效载荷数据（`mavlink_attitude_t`）赋值
+
+函数最终会调用 Mavlink 库函数`_mav_finalize_message_chan_send`。
+
+```c
+//build/px4_fmu-v5_default/mavlink/mavlink_helpers.h
+MAVLINK_HELPER void _mav_finalize_message_chan_send(mavlink_channel_t chan, uint32_t msgid,
+                                                    const char *packet,
+						    uint8_t min_length, uint8_t length, uint8_t crc_extra)
+{
+	_mav_finalize_message_chan_send_target(chan, msgid, packet, min_length, length, crc_extra, 0);
+}
+
+
+/**
+ * @brief Finalize a MAVLink message with channel assignment and send
+ 参数	含义
+chan			MAVLink 通信通道编号
+msgid			消息 ID
+packet			已经准备好的消息 Payload
+min_length		消息定义中的最小 Payload 长度（因为 MAVLink 2 允许截断 Payload 尾部连续的零字节）
+length			当前消息 Payload 长度
+crc_extra		当前消息对应的 CRC_EXTRA
+target_sysid	目标系统 ID
+ */
+MAVLINK_HELPER void _mav_finalize_message_chan_send_target(mavlink_channel_t chan, uint32_t msgid,
+                                                    const char *packet,
+						    uint8_t min_length, uint8_t length, uint8_t crc_extra,
+						    uint32_t target_sysid)
+{
+	uint16_t checksum; //存储计算得到的 CRC
+	uint8_t buf[MAVLINK_MAX_HEADER_LEN];
+	uint8_t ck[2]; //存放最终的两个 CRC 字节
+	mavlink_status_t *status = mavlink_get_channel_status(chan);//当前通道的 MAVLink 状态
+	uint8_t header_len;
+	uint8_t signature_len = 0;
+	uint8_t signature[MAVLINK_SIGNATURE_BLOCK_LEN];//存放数字签名数据
+	bool mavlink1 = (status->flags & MAVLINK_STATUS_FLAG_OUT_MAVLINK1) != 0;//判断协议版本
+    //判断是否启用签名：当前不是 MAVLink 1 && 当前通道配置了签名状态对象 && 配置要求对发送消息进行签名
+	bool signing = 	(!mavlink1) && status->signing && (status->signing->flags & MAVLINK_SIGNING_FLAG_SIGN_OUTGOING);
+	uint8_t incompat_flags = 0;
+
+        if (mavlink1) { //mavlink 1
+            length = min_length;
+            if (msgid > 255 || mavlink_system.sysid > 255 || target_sysid > 255) {
+                // can't send 16 bit msgids or 32 bit IDs in MAVLink1
+                _mav_parse_error(status);
+                return;
+            }
+        } else {
+	    if (signing) {//当前消息带有数字签名
+		incompat_flags |= MAVLINK_IFLAG_SIGNED;
+	    }
+	    if (mavlink_system.sysid > 255) { //	发送系统 ID 使用扩展的 32 位表示
+		incompat_flags |= MAVLINK_IFLAG_SYSID32;
+	    }
+	    if (target_sysid > 255) {//目标系统 ID 使用扩展的 32 位表示
+		incompat_flags |= MAVLINK_IFLAG_TARGET32;
+	    }
+            length = _mav_trim_payload(packet, length); //截断 Payload 尾部的零字节
+        }
+	header_len = _mav_header_pack(buf,
+				      mavlink1?MAVLINK_STX_MAVLINK1:MAVLINK_STX, length,
+				      incompat_flags, 0,
+				      status->current_tx_seq,
+				      mavlink_system.sysid, mavlink_system.compid, msgid,
+				      target_sysid);
+	status->current_tx_seq++; //更新发送序列号
+	checksum = crc_calculate((const uint8_t*)&buf[1], header_len-1);
+	crc_accumulate_buffer(&checksum, packet, length);
+	crc_accumulate(crc_extra, &checksum);
+	ck[0] = (uint8_t)(checksum & 0xFF);
+	ck[1] = (uint8_t)(checksum >> 8);
+
+#ifndef MAVLINK_NO_SIGN_PACKET
+	if (signing) { //生成数字签名
+		// possibly add a signature
+		signature_len = mavlink_sign_packet(status->signing, signature, buf, header_len,
+						    (const uint8_t *)packet, length, ck);
+	}
+#endif
+	//宏，用于在发送一组数据前后执行必要的同步或资源管理操作。
+	MAVLINK_START_UART_SEND(chan, header_len + 2 + (uint16_t)length + (uint16_t)signature_len);
+	_mavlink_send_uart(chan, (const char *)buf, header_len);
+	_mavlink_send_uart(chan, packet, length);
+	_mavlink_send_uart(chan, (const char *)ck, 2);
+	if (signature_len != 0) {
+		_mavlink_send_uart(chan, (const char *)signature, signature_len);
+	}
+	MAVLINK_END_UART_SEND(chan, header_len + 2 + (uint16_t)length + (uint16_t)signature_len);
+}
+```
+
+- 函数 mavlink_get_channel_status 由用户定制，即上层模块提供，用于获取Mavlink 状态。
+
+  > px4 官方已经定义过：src/modules/mavlink/mavlink_main.cpp
+
+- 函数 `MAVLINKS_START_UART_SEND`、`_mavlink_send_uart`、`MAVLINK_END_UART_SEND`均由上层模块提供。
+
+  > `MAVLINK_START_UART_SEND`用于开始发送，申请信号量用于临界区保护
+  >
+  > `_mavlink_send_uart `用于通过硬件设备将Mavlink消息发送出去。
+  >
+  > `MAVLINK_END_UART_SEND`表示结束发送，其功能是释放发送开始函数申请的信号量以退出临界区
+
+
+
+##### 消息解析
+
+Mavlink 库提供的消息解析函数：
+
+```c
+/*
+* 这是一个便捷函数，用于处理完整的 MAVLink 解析。
+* 该函数将逐字节解析，并在收到完整数据包后返回。
+* 它可以成功解码。该函数将返回0或1。
+* 消息被解析到一个内部缓冲区中（每个通道对应一个缓冲区）。
+* 当接收到完整消息时，该消息会被复制到 *r_message 中，同时通道的状态也会被复制到 * r_mavlink_status 中。
+* 
+* @param chan     要解析的通道ID。  
+*                 通道并非像串口那样的物理消息通道，而是通信流的逻辑分区。COMM_NB 是MCU（例如ARM7）上通道数量的限制，
+*				  而COMM_NB_HIGH 是Linux/Windows系统中通道数量的限制  
+* @param c        要解析的字符
+*
+* @param r_message 如果无法解码消息则为 NULL，否则为消息数据  
+* @param r_mavlink_status 如果成功解码消息，则此参数将被填充为该通道的统计信息  
+* 返回值：如果无法解码消息或 CRC 错误返回 0，成功解码且 CRC 正确返回 1
+*/
+MAVLINK_HELPER uint8_t mavlink_parse_char(uint8_t chan, uint8_t c, mavlink_message_t* r_message, mavlink_status_t* r_mavlink_status)
+```
+
+- 功能逐字节从硬件设备中获取数据
+
+- 解析完成后的消息存放在结构体mavlink_message_t 类型变量中，应用程序根据结构体成员变量 msgid（消息ID）调用对应消息源码文件的函数“mavlink_msg_xxx_decode”，以提取实际的有效载荷。
+
+  
+
+  
+
+------
+
+
+
+#### 上层 Mavlink 模块
+
+在PX4启动脚本`ROMFS/cannode/init.d/rcS`中有如下代码，用于：**在 PX4 系统启动过程中，执行自动生成的** `rc.serial` **脚本，根据配置启动和初始化各个 UART/Serial 串口设备驱动。**
+
+```python
+# ROMFS/px4fmu_common/init.d/rcS 路径下
+	#
+	# Start UART/Serial device drivers.
+	# Note: rc.serial is auto-generated from Tools/serial/generate_config.py
+	#
+	. ${R}etc/init.d/rc.serial
+```
+
+`rc.serial`脚本路径：“`build/px4_fmu-v5_default/etc/init.d/rc.serial`”
+
+rc.serial脚本中有也有很多启动mavlink 的命令。
+
+rcS中关于启动数传1通道Mavlink 实例的命令如下：
+
+```sh
+mavlink start -d /dev/ttyACM0
+...
+#
+# 启动完成，通知 MAVLink 应用系统现已完全启动并运行。
+#
+mavlink boot_complete
+```
+
+
+
+上层 Mavlink模块入口函数(由cmakelists.txt文件决定了，入口函数省略 ``_main`` 后缀_):
+
+![image-20261118174014603](./assets/image-20261118174014603.png)
+
+
+
+```c
+extern "C" __EXPORT int mavlink_main(int argc, char *argv[])
+{
+	if (argc < 2) {
+		usage();
+		return 1;
+	}
+
+	if (!strcmp(argv[1], "start")) {
+		return Mavlink::start(argc, argv);
+
+	} else if (!strcmp(argv[1], "stop-all")) {
+		return Mavlink::destroy_all_instances();
+
+	} else if (!strcmp(argv[1], "status")) {
+		bool show_streams_status = argc > 2 && strcmp(argv[2], "streams") == 0;
+		return Mavlink::get_status_all_instances(show_streams_status);
+
+	} else if (!strcmp(argv[1], "stop")) {
+		return Mavlink::stop_command(argc, argv);
+
+	} else if (!strcmp(argv[1], "stream")) {
+		return Mavlink::stream_command(argc, argv);
+
+	} else if (!strcmp(argv[1], "boot_complete")) {
+		Mavlink::set_boot_complete();
+		return 0;
+
+	} else {
+		usage();
+		return 1;
+	}
+
+	return 0;
+}
+```
+
+`Mavlink::start`：
+
+- 初始化类`MavlinkULog`、`MavlinkCommandSender`
+
+- 创建了一个名称为“mavlink_main”的函数，任务运行的入口地址是：`Mavlink::start_helper`。
+  - 创建Mavlink实例：**`Mavlink *instance = new Mavlink();`**
+  - 任务实际执行函数：`task_main`	
+
+```cpp
+int
+Mavlink::start(int argc, char *argv[])
+{
+	MavlinkULog::initialize();
+	MavlinkCommandSender::initialize();
+
+	if (!_event_buffer) {
+		_event_buffer = new events::EventBuffer();
+		int ret;
+
+		if (_event_buffer && (ret = _event_buffer->init()) != 0) {
+			PX4_ERR("EventBuffer init failed (%i)", ret);
+			delete _event_buffer;
+			_event_buffer = nullptr;
+		}
+
+		if (!_event_buffer) {
+			PX4_ERR("EventBuffer alloc failed");
+			return 1;
+		}
+	}
+
+	// Wait for the instance count to go up one
+	// before returning to the shell
+	int ic = Mavlink::instance_count();
+
+	if (ic == MAVLINK_COMM_NUM_BUFFERS) {
+		PX4_ERR("Maximum MAVLink instance count of %d reached.", MAVLINK_COMM_NUM_BUFFERS);
+		return 1;
+	}
+
+	// 创建线程
+
+	// 这里是控制流的分叉点
+	// 位于启动任务和子任务之间——start_helper() 只有在启动的任务退出后才会返回
+	px4_task_spawn_cmd("mavlink_main",
+			   SCHED_DEFAULT,
+			   SCHED_PRIORITY_DEFAULT,
+			   PX4_STACK_ADJUSTED(2896) + MAVLINK_NET_ADDED_STACK,
+			   (px4_main_t)&Mavlink::start_helper,
+			   (char *const *)argv);
+
+	// Ensure that this shell command
+	// does not return before the instance
+	// is fully initialized. As this is also
+	// the only path to create a new instance,
+	// this is effectively a lock on concurrent
+	// instance starting. XXX do a real lock.
+
+	// Sleep 500 us between each attempt
+	const unsigned sleeptime = 500;
+
+	// Wait 100 ms max for the startup.
+	const unsigned limit = 100 * 1000 / sleeptime;
+
+	unsigned count = 0;
+
+	while (ic == Mavlink::instance_count() && count < limit) {
+		px4_usleep(sleeptime);
+		count++;
+	}
+
+	if (ic == Mavlink::instance_count()) {
+		return PX4_ERROR;
+
+	} else {
+		return PX4_OK;
+	}
+}
+```
+
+```cpp
+int Mavlink::start_helper(int argc, char *argv[])
+{
+	/* create the instance in task context */
+	Mavlink *instance = new Mavlink();
+
+	int res;
+
+	if (!instance) {
+		/* out of memory */
+		res = -ENOMEM;
+		PX4_ERR("OUT OF MEM");
+
+	} else {
+		/* this will actually only return once MAVLink exits, unless there's a startup error */
+		res = instance->task_main(argc, argv);
+
+		if (res != PX4_OK) {
+			LockGuard lg{mavlink_module_mutex};
+			int instance_id = instance->get_instance_id();
+
+			if (instance_id >= 0) {
+				pthread_mutex_lock(&mavlink_channel_send_mutexes[instance_id]);
+				mavlink_module_instances[instance_id] = nullptr;
+				pthread_mutex_unlock(&mavlink_channel_send_mutexes[instance_id]);
+				mavlink_instance_count.fetch_sub(1);
+			}
+
+			delete instance;
+		}
+	}
+
+	return res;
+}
+```
+
+Mavlink 模块包括发送和接收两个方向，Mavlink 模块启动后创建任务和线程对消息进行收发管理
+
+- 发送任务由（mavlink_main创建）以固定周期运行
+- 接收线程（由发送任务创建）由监视的设备文件触发执行
+
+
+
+##### 发送任务
+
+Mavlink模块发送任务的实际执行函数为 `task_main` , 按照PX4 系统默认的配置，函数完成的主要工作如下：
+
+```mermaid
+graph TD
+    A[开始] --> 
+    B["<div style='text-align: left;'>
+     初始化部分：
+    1. 解析命令参数并据此初始化变量；   
+    2. 向系统注册当前MAVLink 通道    
+    3. 根据用户设定的模式配置MAVLink 流
+    4. 计算任务周期，即延时时间        \
+    5. 打开底层硬件设备（串口或网络）
+    5. 向地面站发送MAVLink 版本等信息  
+    6. 创建发送线程
+    </div>"]
+    B -->
+    C["<div style='text-align: left;'>
+     循环部分：
+     1. 延时
+     2. 更新Mavlink模块配置参数
+     3. 配置HIL和虚拟摇杆数据MAVLink流
+     4. 接收到Mavlink 命令消息后发送命令应答
+     5. 发送日志，飞行日志，终端等模块消息
+     6. 处理stream 命令配置的Mavlink 流
+     7. 发送系统中的Mavlink 流
+     8. 更新Mavlink 状态并发布uOrB主题telemetry_status
+      </div>"
+    ]
+```
+
+
+
+
+
+发送任务最重要的工作就是配置并发送Mavlink 流。
+
+Mavlink 流的发送大致需要经历定义，注册，配置，和发送等步骤。
+
+```c
+List<MavlinkStram *>_streams
+```
+
+
+
+###### Mavlink 流定义
+
+Mavlink 流定义目录：`src/modules/mavlink/streams`，此路径下全部是头文件，每一个头文件与每一条mavlink 流对应。
+
+**Mavlink 流是基类 MavlinkStream 的派生类**。例如，飞机姿态流是 ``MavlinkStreamAttitude``类，对应的头文件是``src/modules/mavlink/streams/ATTITUDE.hpp``
+
+```c++
+class MavlinkStreamAttitude : public MavlinkStream
+```
+
+MavlinkStream类是所有Mavlink 流的基类，它规定了Mavlink流同意的接口函数，包括消息ID，消息名称，消息大小，发送频率，实际发送函数.等。
+
+所有的Mavlink流都继承自MavlinkStream类，MavlinkStream类中以下类方法定义为虚（非虚的属性和实现全部省略了），具体的实现需要在Mavlink类中实现。
+
+```c++
+class MavlinkStream : public ListNode<MavlinkStream *>
+{
+public:
+	virtual const char *get_name() const = 0;
+	virtual uint16_t get_id() = 0;
+	/**
+	 * @return true if steam rate shouldn't be adjusted
+	 */
+	virtual bool const_rate() { return false; }
+	/**
+	 * Get maximal total messages size on update
+	 */
+	virtual unsigned get_size() = 0;
+	/**
+	 * This function is called in response to a MAV_CMD_REQUEST_MESSAGE command.
+	 */
+	virtual bool request_message(float param2 = 0.0, float param3 = 0.0, float param4 = 0.0,
+				     float param5 = 0.0, float param6 = 0.0, float param7 = 0.0)
+	{
+		return send();
+	}
+	/**
+	 * Get the average message size
+	 *
+	 * For a normal stream this equals the message size,
+	 * for something like a parameter or mission message
+	 * this equals usually zero, as no bandwidth
+	 * needs to be reserved
+	 */
+	virtual unsigned get_size_avg() { return get_size(); }
+protected:
+	virtual bool send() = 0;
+	/**
+	 * Function to collect/update data for the streams at a high rate independent of
+	 * actual stream rate.
+	 *
+	 * This function is called at every iteration of the mavlink module. This default one does nothing, and
+	 * records that, so that the module can skip the streams using it while they are not due: an override
+	 * must not call it.
+	 */
+	virtual void update_data() { _default_update_data = true; }
+};
+
+```
+
+在实际定义mavlink 流时是这样定义的：
+
+```c++
+class MavlinkStreamAttitude : public MavlinkStream
+{
+public:
+	static MavlinkStream *new_instance(Mavlink *mavlink) { return new MavlinkStreamAttitude(mavlink); }
+
+	static constexpr const char *get_name_static() { return "ATTITUDE"; }
+	static constexpr uint16_t get_id_static() { return MAVLINK_MSG_ID_ATTITUDE; }
+
+	const char *get_name() const override { return get_name_static(); }
+	uint16_t get_id() override { return get_id_static(); }
+
+	unsigned get_size() override
+	{
+		return _att_sub.advertised() ? MAVLINK_MSG_ID_ATTITUDE_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
+	}
+
+private:
+	explicit MavlinkStreamAttitude(Mavlink *mavlink) : MavlinkStream(mavlink) {}
+
+	uORB::Subscription _att_sub{ORB_ID(vehicle_attitude)};
+	uORB::Subscription _angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
+
+	bool send() override
+	{
+		vehicle_attitude_s att;
+
+		if (_att_sub.update(&att)) {
+			vehicle_angular_velocity_s angular_velocity{};
+			_angular_velocity_sub.copy(&angular_velocity);
+
+			mavlink_attitude_t msg{};
+
+			const matrix::Eulerf euler = matrix::Quatf(att.q);
+			msg.time_boot_ms = att.timestamp / 1000;
+			msg.roll = euler.phi();
+			msg.pitch = euler.theta();
+			msg.yaw = euler.psi();
+
+			msg.rollspeed = angular_velocity.xyz[0];
+			msg.pitchspeed = angular_velocity.xyz[1];
+			msg.yawspeed = angular_velocity.xyz[2];
+
+			mavlink_msg_attitude_send_struct(_mavlink->get_channel(), &msg);
+
+			return true;
+		}
+
+		return false;
+	}
+};
+```
+
+**PX4 这里采用的是一种受控对象创建机制：不允许外部代码直接构造某个具体的 Stream，而是要求外部通过该类提供的静态工厂函数** `new_instance()` **创建对象。** 主要体现在：这两行代码。
+
+- 派生类Mavlink流的实例构造函数`static MavlinkStream *new_instance(Mavlink *mavlink) { return new MavlinkStreamAttitude(mavlink); }`
+
+- 派生类Mavlink流的构造函数``explicit MavlinkStreamAttitude(Mavlink *mavlink) : MavlinkStream(mavlink) {}`
+
+  > 1.将构造函数`MavlinkStreamAttitude(Mavlink *mavlink) `权限设置为private，**外部不能直接创建对象**，只能通过共有类方法创建对象。
+  >
+  > 2.`static MavlinkStream *new_instance(Mavlink *mavlink)`**返回值类型为基类**，利用多态的性质，派生类对象的地址可以通过基类指针保存。（注册Mavlink 流相关函数体现了这里的用法：
+  >
+  > > > > 3.同时将其设置为静态类方法，可以不用创建成员，而直接通过类名创建对象。
+  > > > >
+  > > > > 4.参数类型为基类，利用多态的性质，不同的派生类都可以作为参数传入，调用各自的方法
+
+在实际工作时，有时我们只想知道这个mavlink消息的名字或者信息id，这并不需要创建MavlinkStream 对象，因此PX4 的开发人员编写了下面的代码：编写了必要的静态成员函数，表示它是静态成员函数，属于类本身，而不是某一个对象。因此，可以直接通过类名调用：
+
+```c++
+	static constexpr const char *get_name_static() { return "ATTITUDE"; }
+	uint16_t get_id() override { return get_id_static(); }
+```
+
+Mavlink 流实例的创建是通过Mavlink流的注册实现的。
+
+###### 注册Mavlink 流
+
+在 `src/modules/mavlink/mavlink_messages.h`路径下定了`StreamListItem`类：
+
+```cpp
+
+class StreamListItem
+{
+
+public:
+	MavlinkStream *(*new_instance)(Mavlink *mavlink);
+	const char *name;
+	uint16_t id;
+
+	constexpr StreamListItem(MavlinkStream * (*inst)(Mavlink *mavlink), const char *_name, uint16_t _id) :
+		new_instance(inst),
+		name(_name),
+		id(_id) {}
+
+	const char *get_name() const { return name; }
+	uint16_t get_id() const { return id; }
+};
+
+template <class T>
+static constexpr StreamListItem create_stream_list_item()
+{
+	return StreamListItem(&T::new_instance, T::get_name_static(), T::get_id_static());
+}
+```
+
+> **注意**
+>
+> ```c++
+> template <class T>
+> static constexpr StreamListItem create_stream_list_item()
+> {
+> 	return StreamListItem(&T::new_instance, T::get_name_static(), T::get_id_static());
+> }
+> ```
+>
+> 这里第一个参数是函数指针，传入的是mavlink流实例创建函数的函数指针（所以此时mavlink实例还没有被创建）。
+> `：new_instance(inst)`是内成员初始化，将`StreamListItem`类中的函数指针`new_instance`初始化为`inst`，也就是具体的mavlink流的实例创建方法的函数指针。
+
+并在 `src/modules/mavlink/mavlink_messages.cpp`路径定义了`StreamListItem`类型的变量数组`streams_list`，该变量存储了系统中所有的Mavlink流消息，用户定义的流首先需要向该数组 “注册”才能被系统识别。
+
+```cpp
+static constexpr StreamListItem streams_list[] = {
+#if defined(HEARTBEAT_HPP)
+	create_stream_list_item<MavlinkStreamHeartbeat>(),
+#endif // HEARTBEAT_HPP
+#if defined(STATUSTEXT_HPP)
+	create_stream_list_item<MavlinkStreamStatustext>(),
+#endif // STATUSTEXT_HPP
+#if defined(COMMAND_LONG_HPP)
+	create_stream_list_item<MavlinkStreamCommandLong>(),
+#endif // COMMAND_LONG_HPP
+#if defined(SYS_STATUS_HPP)
+	create_stream_list_item<MavlinkStreamSysStatus>(),
+#endif // SYS_STATUS_HPP
+    
+    ...
+};
+```
+
+在`streams_list`里注册mavlink 流，调用`create_stream_list_item`函数，这是一个模板函数，里面调用类`StreamListItem`构造函数`StreamListItem(MavlinkStream * (*inst)(Mavlink *mavlink), const char *_name, uint16_t _id)` 保存mavlink 流实例的地址，以备后续创建之需（注意这里并没有创建mavlink流）。
+
+- > 第一个参数的类型是函数指针，与Mavlink流中的构造实例方法对应。
+
+  > 实际上是通过调用StreamListItem类的构造函数向PX4系统注册Mavlink流，这里采用可变模板参数实现不同对象行为的统一管理，其中模板参T是Mavlink流定义类；函数指针new_instance 用于保存创建Mavlink流类的实例方法。可以看出，注册Mavlink 流实质就是保存Mavlink 流实例创建方法的函数地址，并将其添加至系统流列表中
+
+在代码`return StreamListItem(&T::new_instance, T::get_name_static(), T::get_id_static());`中将Mavlink 流的实例创建函数`T::new_instance`的函数地址传递给了函数指针`new_instance`(是`streams_list`成员）因此之手如果要创建某一个mavlink流 就可以通过`streams_list ::new_instance`创建。例如：
+
+```
+//创建MavlinkStreamHeartbeat
+streams_list[0] ::new_instance；
+```
+
+
+
+###### 配置Mavlink 流
+
+在 Mavlink模块中使用MavlinkStream类型的指针链表 `_streams`维护目前系统中所有活跃的Mavlink 流，所谓配置Mavlink 流实际就是向该链表添加元素，添加的具体方法见头文件 `mavlink_main.h`。任务的初始化过程中会调用函数`configure_streams_to_default` 用于配置Mavlink流，即向链表中 `_streams`中添加 Mavlink 流对象指针，
+
+```c++
+class Mavlink final : public ModuleParams
+{
+public:
+	List<MavlinkStream *> &get_streams() { return _streams; }
+private:
+	List<MavlinkStream *>		_streams;
+    
+    int configure_streams_to_default(const char *configure_single_stream = nullptr); 
+}
+```
+
+
+
+`_mode`是mavlink 通信的模式 （MAVLINK_MODE_NORMAL 表示和地面站通信，不同模式要传输的mavlink 消息种类是不同的，比如PX4和地面站通信的内容和px4和云台通信的内容肯定是不一样的），
+
+> `streams_mode_normal`**MAVLink Stream 默认配置列表**，专门用于 `MAVLINK_MODE_NORMAL`（普通地面站通信模式）。
+> 	它是一个预先定义好的配置集合，里面记录了：
+>
+> + 需要发送哪些 MAVLink 消息（Stream 名称）。
+> + 每种消息默认以多高的频率发送（rate）。
+
+![image-20261123174539656](./assets/image-20261123174539656.png)
+
+```c++
+int
+Mavlink::configure_streams_to_default(const char *configure_single_stream)
+{
+	int ret = 0;
+	bool stream_configured = false;
+
+	auto configure_stream_local =
+	[&stream_configured, configure_single_stream, &ret, this](const char *stream_name, float rate) {
+		if (!configure_single_stream || strcmp(configure_single_stream, stream_name) == 0) {
+			int ret_local = configure_stream(stream_name, rate);
+
+			if (ret_local != 0) {
+				ret = ret_local;
+			}
+
+			stream_configured = true;
+		}
+	};
+
+	auto configure_streams_local = [&configure_stream_local](const auto & streams) {
+		for (const auto &stream : streams) {
+			configure_stream_local(stream.name, stream.rate);
+		}
+	};
+
+	switch (_mode) {
+	case MAVLINK_MODE_NORMAL:
+		configure_streams_local(streams_mode_normal);
+		break;
+
+```
+
+
+
+最终在`configure_stream`函数中创建了mavlink 流(`create_mavlink_stream`)，并将活跃的mavlink 消息添加到了`_streams`。
+
+```c++
+// 其他代码省略
+int
+Mavlink::configure_stream(const char *stream_name, const float rate)
+{
+
+	// search for stream with specified name in supported streams list
+	// create new instance if found
+	MavlinkStream *stream = create_mavlink_stream(stream_name, this);
+
+	if (stream != nullptr) {
+		stream->set_interval(interval);
+		_streams.add(stream);
+		_streams_changed = true;
+
+		return OK;
+	}
+}
+```
+
+
+
+> 1. `create_mavlink_stream（）`函数根据流名称从列表streams_list中搜索待配置的流，即搜索系统流列表中的Mavlink 流，此处会通过`new_instance`函数创建对象实例
+>
+>    ```c++
+>    //省略了很多代码
+>    MavlinkStream *create_mavlink_stream(const char *stream_name, Mavlink *mavlink)
+>    {
+>    	// search for stream with specified name in supported streams list
+>    	if (stream_name != nullptr) {
+>    		for (const auto &stream : streams_list) {
+>    			if (strcmp(stream_name, stream.get_name()) == 0) {
+>    				return stream.new_instance(mavlink);
+>    			}
+>    		}
+>    	}
+>    
+>    	return nullptr;
+>    }
+>    ```
+>
+>    `const auto &stream : streams_list`
+>    `stream.new_instance(mavlink);`
+>
+>    这两行代码遍历了streams_list中的实例创建函数，最终创建了具体的mavlink流对象。
+>
+> 2. `_streams.add(stream);` 将带配置的流添加到活跃流列表`_streams`中。
+
+
+
+###### 发送 Mavlink 流
+
+在发送任务的主循环中，完成了mavlink消息的发送。
+
+```c++
+int
+Mavlink::task_main(int argc, char *argv[])
+{
+	while (!should_exit()) {
+	/* main loop */
+		for (const auto &stream : _streams) {
+			// skip the call when it would do nothing (most streams are not due on a given loop)
+			if (!stream->default_update_data() || !stream->not_due(t, stream_margin)) {
+				stream->update(t);
+			}
+		}
+}
+```
+
+函数`update` 会在流配置的时间间隔到达的情况下，调用流类的`send`函数发送·消息。
+
+`stream->update(t);`实现了发送功能，其内部调用了`MavlinkStream::send()`这是一个纯虚函数，由各自具体的消息MavlinkStream流结构体定义（如：`class MavlinkStreamAltitude : public MavlinkStream`）。
+
+```c++
+//省略了很多代码
+int
+MavlinkStream::update(const hrt_abstime &t)
+{
+	update_data();
+	// 如果该消息从未发送过，我们希望立即发送，并可以立即返回
+	if (_last_sent == 0) {
+
+		if (send()) {
+			_last_sent = hrt_absolute_time();
+
+			if (!_first_message_sent) {
+				_first_message_sent = true;
+			}
+		}
+
+		return 0;
+	}
+}
+```
+
+> 调用类内send 函数发送Mavlink 消息，MavlinkStream类的send函数是纯虚函数，由具体类实现，一般是从uORB 主题获取待发送的数据，并调用底层Mavlink 模块提供的发送接口将数据发送出去。
+>
+> 
+
+##### 接收任务
+
+
+
+```mermaid
+graph TD
+    A["mavlink start"] --> B["mavlink_main()"]
+    B --> C["Mavlink::start()"]
+    C --> D["创建 Mavlink 对象"]
+    D --> E["Mavlink 主任务启动"]
+    E --> F["_receiver.start()"]
+    F --> G["MavlinkReceiver::start()"]
+    G --> H["创建接收线程"]
+    H --> I["MavlinkReceiver::run()"]
+```
+
+
+
+Mavlink类中包含MavlinkReceiver类。并且在`task_main`中通过 `_receiver.start()`;创建了mavlink接收线程。
+
+```c++
+//src/modules/mavlink/mavlink_main.h
+class Mavlink final : public ModuleParams
+{
+private:
+	MavlinkReceiver 	_receiver;
+}
+
+//src/modules/mavlink/mavlink_main.cpp、
+int
+Mavlink::task_main(int argc, char *argv[])
+{
+    _receiver.start();
+}
+```
+
+`mavlink_receive.cpp` 中的接收线程用于解析地面站发送的Mavlink消息。线程的执行函数为`run`（`MavlinkReceiver::run()`）。其总体运行流程是通过poll 函数监视底层硬件驱动文件，读取底层硬件传输的数据，调用底层库函数`mavlink_parse_char `将数据解析为Mavlink 消息，调用函数`handle_message `处理一般的Mavlink 消息，并通过专用类提供的接口处理飞行任务参数，配置参数日志等模块的相关消息
+
+```c++
+void MavlinkReceiver::start()
+{
+	pthread_attr_t receiveloop_attr;
+	pthread_attr_init(&receiveloop_attr);
+
+	struct sched_param param;
+	(void)pthread_attr_getschedparam(&receiveloop_attr, &param);
+	param.sched_priority = SCHED_PRIORITY_MAX - 80;
+	(void)pthread_attr_setschedparam(&receiveloop_attr, &param);
+
+	pthread_attr_setstacksize(&receiveloop_attr, PX4_STACK_ADJUSTED(4000 + MAVLINK_RECEIVER_NET_ADDED_STACK));
+
+	pthread_create(&_thread, &receiveloop_attr, MavlinkReceiver::start_trampoline, (void *)this);
+
+	pthread_attr_destroy(&receiveloop_attr);
+}
+
+```
+
+显示调用`pthread_create`函数创建线程，第三个参数为线程入口函数地址，`MavlinkReceiver::start_trampoline`，此函数中调用了`run`
+
+
+
+<img src="./assets/image-20261124204023740.png" alt="image-20261124204023740" style="zoom: 25%;" />
+
+在MavlinkReceiver 线程接收到一条mavlink_message_t 类型消息之后，并没有将其转换为不同类型的具体消息，而是将消息顺序交给不同模块的处理程序进行分析，如果消息符合当前模块功能需要，则继续处理，否则直接抛弃。通用的消息由`MavlinkReceive`类内的函数`handle_message`根据ID嗲用相应的处理函数`handle_message_xxx `进行处理。
+
+通常情况下，函数`handle_message_xxx` 将解析出来的Mavlink 消息转化为uORB 消息供给px4系统的内容传递。以地面站发送的“设置飞行模式”消息为例，函数`handle_message_set_mode`用于处理该消息，
+
+```c++
+void
+MavlinkReceiver::handle_message(mavlink_message_t *msg)
+{
+	switch (msg->msgid) {
+	case MAVLINK_MSG_ID_COMMAND_LONG:
+		handle_message_command_long(msg);
+		break;
+
+	case MAVLINK_MSG_ID_COMMAND_INT:
+		handle_message_command_int(msg);
+		break;
+
+	case MAVLINK_MSG_ID_COMMAND_ACK:
+		handle_message_command_ack(msg);
+		break;
+
+	case MAVLINK_MSG_ID_OPTICAL_FLOW_RAD:
+		handle_message_optical_flow_rad(msg);
+		break;
+
+	case MAVLINK_MSG_ID_PING:
+		handle_message_ping(msg);
+		break;
+    case MAVLINK_MSG_ID_SET_MODE:
+		handle_message_set_mode(msg);
+		break;
+```
+
+
+
+```c++
+void
+MavlinkReceiver::handle_message_set_mode(mavlink_message_t *msg)
+{
+	mavlink_set_mode_t new_mode;
+	mavlink_msg_set_mode_decode(msg, &new_mode);
+
+	union px4_custom_mode custom_mode;
+	custom_mode.data = new_mode.custom_mode;
+
+	vehicle_command_s vcmd{};
+
+	vcmd.timestamp = hrt_absolute_time();
+
+	/* copy the content of mavlink_command_long_t cmd_mavlink into command_t cmd */
+	vcmd.param1 = (float)new_mode.base_mode;
+	vcmd.param2 = (float)custom_mode.main_mode;
+	vcmd.param3 = (float)custom_mode.sub_mode;
+
+	vcmd.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+	vcmd.target_system = mavlink_target_system(msg, new_mode.target_system);
+	vcmd.target_component = MAV_COMP_ID_ALL;
+	vcmd.source_system = msg->sysid;
+	vcmd.source_component = msg->compid;
+	vcmd.confirmation = true;
+	vcmd.from_external = true;
+
+	_cmd_pub.publish(vcmd);
+}
+```
+
+处理函数将接收到的Mavlink 消息（消息ID：MAVLINK_MSG_ID_SET_MODE）转为uPRB 消息vehicle_command并发布，相关应用程序接收到这一uORB消息后会进行飞行模式切换。
+
+
+
+##### Mavlink 模块多通道
+
+在mavlink_main.cpp中维护了mavlink类实例指针数组mavlink_module_instances,通过start 命令启动的每个mavlink通道（最多支持6个通过）都是数组中的一个元素。虽然各通道调用的函数只有一份且功能相同，但各通道都会船舰属于自己的任务，线程以及活跃流链表`_stream`，彼此之间相互独立，因此，各通道发送的Mavlink消息可以独立配置。
+
+------
+
+
+
+### 源码分析
+
+#### CMakeLists.txt
+
+```cmake
+# 指定MAVLINK_GIT_DIR 路径，这里不能使用相对路径，因为相对路径受上下文的影响。这里路径是mavlink工具链的路径
+#[[
+src/modules/mavlink/
+├── CMakeLists.txt
+├── mavlink/                <-- MAVLINK_GIT_DIR
+│   ├── pymavlink/
+│   ├── message_definitions/
+│   └── ...
+├── mavlink_main.cpp
+└── ...
+]]
+set(MAVLINK_GIT_DIR "${CMAKE_CURRENT_LIST_DIR}/mavlink")
+# 指定构建文件、编译产物等所在的目录
+# ${CMAKE_BINARY_DIR}指的是执行cmake命令所在目录（顶层构建目录）:
+# [[
+PX4-Autopilot/
+├── build/
+│   └── px4_sitl_default/
+│       ├── ...
+│       └── mavlink/       <-- MAVLINK_LIBRARY_DIR
+├── src/
+│   └── modules/
+│       └── mavlink/
+│           ├── CMakeLists.txt
+│           └── mavlink/
+└── CMakeLists.txt
+]]
+set(MAVLINK_LIBRARY_DIR "${CMAKE_BINARY_DIR}/mavlink")
+# 命令file的子命令file(RELATIVE_PATH ..)计算相对路径
+# MAVLINK_GIT_DIR_RELATIVE =  ${MAVLINK_GIT_DIR}相对于 ${CMAKE_SOURCE_DIR}（顶层cmake路径）
+# MAVLINK_GIT_DIR_RELATIVE = src/modules/mavlink/mavlink
+file(RELATIVE_PATH MAVLINK_GIT_DIR_RELATIVE ${CMAKE_SOURCE_DIR} ${MAVLINK_GIT_DIR})
+
+# 建一个名为 git_mavlink_v2 的 CMake target
+px4_add_git_submodule(TARGET git_mavlink_v2 PATH "${MAVLINK_GIT_DIR}")
+
+# always generate uAvionix dialect 指定MAVLink 方言
+set(MAVLINK_DIALECT_UAVIONIX "uAvionix")
+add_custom_command(
+	OUTPUT ${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}/${MAVLINK_DIALECT_UAVIONIX}.h
+	COMMAND
+		${PYTHON_EXECUTABLE} ${MAVLINK_GIT_DIR}/pymavlink/tools/mavgen.py
+			--lang C --wire-protocol 2.0
+			--output ${MAVLINK_LIBRARY_DIR}
+			${MAVLINK_GIT_DIR}/message_definitions/v1.0/${MAVLINK_DIALECT_UAVIONIX}.xml > ${CMAKE_CURRENT_BINARY_DIR}/mavgen_${MAVLINK_DIALECT_UAVIONIX}.log
+	DEPENDS
+		git_mavlink_v2
+		${MAVLINK_GIT_DIR}/pymavlink/tools/mavgen.py
+		${MAVLINK_GIT_DIR}/message_definitions/v1.0/${MAVLINK_DIALECT_UAVIONIX}.xml
+
+	COMMENT "Generating Mavlink ${MAVLINK_DIALECT_UAVIONIX}: ${MAVLINK_GIT_DIR_RELATIVE}/message_definitions/v1.0/${MAVLINK_DIALECT_UAVIONIX}.xml"
+)
+# 创建构建目标 mavlink_c_generate_uavionix
+# build/px4_fmu-v5_default/mavlink/uAvionix
+add_custom_target(mavlink_c_generate_uavionix DEPENDS ${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}/${MAVLINK_DIALECT_UAVIONIX}.h)
+set_source_files_properties(${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}/${MAVLINK_DIALECT_UAVIONIX}.h PROPERTIES GENERATED true)
+
+# generate the primary dialect
+# ${CONFIG_MAVLINK_DIALECT}由kconfig生成，默认值为common
+add_custom_command(
+	OUTPUT ${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}/${CONFIG_MAVLINK_DIALECT}.h
+	COMMAND
+		${PYTHON_EXECUTABLE} ${MAVLINK_GIT_DIR}/pymavlink/tools/mavgen.py
+			--lang C --wire-protocol 2.0
+			--output ${MAVLINK_LIBRARY_DIR}
+			${MAVLINK_GIT_DIR}/message_definitions/v1.0/${CONFIG_MAVLINK_DIALECT}.xml > ${CMAKE_CURRENT_BINARY_DIR}/mavgen_${CONFIG_MAVLINK_DIALECT}.log
+	DEPENDS
+		git_mavlink_v2
+		${MAVLINK_GIT_DIR}/pymavlink/tools/mavgen.py
+		${MAVLINK_GIT_DIR}/message_definitions/v1.0/${CONFIG_MAVLINK_DIALECT}.xml
+		${BOARD_DEFCONFIG}
+
+		# generate after uAvionix
+		mavlink_c_generate_uavionix
+		${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}/${MAVLINK_DIALECT_UAVIONIX}.h
+
+	COMMENT "Generating Mavlink ${CONFIG_MAVLINK_DIALECT}: ${MAVLINK_GIT_DIR_RELATIVE}/message_definitions/v1.0/${CONFIG_MAVLINK_DIALECT}.xml"
+)
+# build/px4_fmu-v5_default/mavlink/common
+add_custom_target(mavlink_c_generate DEPENDS ${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}/${CONFIG_MAVLINK_DIALECT}.h)
+set_source_files_properties(${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}/${CONFIG_MAVLINK_DIALECT}.h PROPERTIES GENERATED true)
+
+
+
+# mavlink header only library
+add_library(mavlink_c INTERFACE)
+target_compile_options(mavlink_c INTERFACE -Wno-address-of-packed-member -Wno-cast-align)
+target_sources(mavlink_c
+	INTERFACE
+		${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}/${CONFIG_MAVLINK_DIALECT}.h
+		${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}/${MAVLINK_DIALECT_UAVIONIX}.h
+)
+# 将mavlink的输出位置添加到C编译器的搜索路径中
+target_include_directories(mavlink_c
+	INTERFACE
+		${MAVLINK_LIBRARY_DIR}
+		${MAVLINK_LIBRARY_DIR}/../
+		${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}
+		${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}
+)
+
+px4_add_module(
+	MODULE modules__mavlink  #模块名。命名规则：通过“__”（这里是两个下划线）分割文件路径。起始路径是./src 无需给出.
+	MAIN mavlink
+	COMPILE_FLAGS
+		-Wno-enum-compare # ROTATION <-> MAV_SENSOR_ROTATION
+		#-DDEBUG_BUILD
+	SRCS
+		mavlink.c
+		mavlink_command_sender.cpp
+		mavlink_events.cpp
+		mavlink_ftp.cpp
+		mavlink_ftp_param.cpp
+		mavlink_log_handler.cpp
+		mavlink_main.cpp
+		mavlink_messages.cpp
+		mavlink_mission.cpp
+		mavlink_parameters.cpp
+		mavlink_rate_limiter.cpp
+		mavlink_receiver.cpp
+		mavlink_shell.cpp
+		mavlink_simple_analyzer.cpp
+		mavlink_stream.cpp
+		mavlink_timesync.cpp
+		mavlink_ulog.cpp
+		mavlink_sign_control.cpp
+		MavlinkStatustextHandler.cpp
+		open_drone_id_translations.cpp
+		tune_publisher.cpp
+	MODULE_CONFIG
+		module.yaml
+		mavlink_params.yaml
+	DEPENDS
+		airspeed
+		component_general_json # for checksums.h
+		dataman_client
+		drivers_accelerometer
+		drivers_gyroscope
+		drivers_magnetometer
+		conversion
+		gnss
+		sensor_calibration
+		geo
+		mavlink_c
+		timesync
+		tunes
+		variable_length_ringbuffer
+		version
+	UNITY_BUILD
+	)
+
+if(CONFIG_BOARD_HAS_RID_EEPROM)
+	target_link_libraries(modules__mavlink PRIVATE open_drone_id)
+endif()
+
+if(CONFIG_DRIVERS_SERIALPASSTHROUGH)
+	target_link_libraries(modules__mavlink PRIVATE drivers__serialpassthrough)
+endif()
+
+target_link_libraries(modules__mavlink PRIVATE failure_injection)
+
+px4_add_unit_gtest(SRC MavlinkStatustextHandlerTest.cpp
+	INCLUDES
+		${MAVLINK_LIBRARY_DIR}
+		${MAVLINK_LIBRARY_DIR}/${CONFIG_MAVLINK_DIALECT}
+		${MAVLINK_LIBRARY_DIR}/${MAVLINK_DIALECT_UAVIONIX}
+	COMPILE_FLAGS
+		-Wno-address-of-packed-member # TODO: fix in c_library_v2
+		-Wno-cast-align # TODO: fix
+	LINKLIBS
+		modules__mavlink
+	)
+
+px4_add_unit_gtest(SRC MavlinkFtpParamTest.cpp EXTRA_SRCS mavlink_ftp_param.cpp)
+
+if(CONFIG_NET AND "${PX4_PLATFORM}" MATCHES "nuttx")
+	target_link_libraries(modules__mavlink PRIVATE nuttx_apps) # netlib_get_ipv4netmask
+endif()
+
+```
+
+
+
+
+
+
+
+
+
+#### PX4 MAVLink 功能模块：`src/modules/mavlink`
+
+MAVLink 只定义了通信协议，并没有规定 PX4 应该如何组织自己的飞控软件。
+
+1. `mavlink_main.cpp / mavlink_main.h`
+
+   > 1. > 
+   >
+   > 模块核心
+   >
+   > 这是你之前已经学习过的部分。
+   >
+   > 主要负责：
+   >
+   > + MAVLink 模块的启动和停止。
+   > + 创建、管理 MAVLink 实例。
+   > + 配置通信设备和通信参数。
+   > + 管理每个实例的运行状态。
+   > + 管理 MAVLink 数据流。
+   >
+   > 你可以把它理解为整个 MAVLink 模块的管理中心。
+
+2. `streams/` 文件夹
+
+   > PX4 需要不断向 QGC 发送飞机的状态信息，例如：
+   >
+   > + 姿态数据 `ATTITUDE`
+   > + 位置数据 `GLOBAL_POSITION_INT`
+   > + 电池数据 `BATTERY_STATUS`
+   > + GPS 数据 `GPS_RAW_INT`
+   > + 本地位置数据 `LOCAL_POSITION_NED`
+   >
+   > 这些数据在 PX4 内部通常来自 uORB。
+   >
+   > 而 `streams/` 中的类，主要负责将 PX4 内部的数据转换为相应的 MAVLink 消息，并通过对应的 MAVLink 实例发送出去。
+   >
+   > ![image-20261112171823130](./assets/image-20261112171823130.png)
+   >
+   > MAVLink Stream 不等于 MAVLink 消息。
+   >
+   > + MAVLink 消息定义规定了数据包的格式。
+   > + MAVLink Stream 负责从 PX4 获取数据，按照消息定义组织数据并发送。
+   >
+   > 你可以在 `streams/` 中找一个姿态数据相关的实现，观察它如何订阅 `vehicle_attitude`，然后调用 `mavlink_msg_attitude_encode()` 或相应的发送接口。
+   >
+   > 
+
+3. `mavlink_receiver.cpp / mavlink_receiver.h`
+
+   > 如果说 Stream 主要负责发送，那么 Receiver 就主要负责接收。
+   >
+   > 例如，QGC 向 PX4 发送一条 MAVLink 命令：
+   >
+   > ```
+   > QGC
+   > |
+   > | COMMAND_LONG
+   > v
+   > PX4 MAVLink Receiver
+   > |
+   > | 解析消息、分发处理
+   > v
+   > 对应的 PX4 功能模块
+   > ```
+   >
+   > Receiver 负责处理接收到的消息，并根据消息类型执行相应逻辑。
+   >
+   > 例如，接收命令、处理心跳消息、处理外部系统发来的状态或控制请求等。
+
+4. 其他几个文件
+
+   > | 文件                         | 主要职责                                   |
+   > | ---------------------------- | ------------------------------------------ |
+   > | `mavlink_mission.cpp`        | 航点任务上传、下载等 Mission Protocol 功能 |
+   > | `mavlink_parameters.cpp`     | MAVLink 参数读取、设置和传输               |
+   > | `mavlink_ftp.cpp`            | MAVLink 文件传输                           |
+   > | `mavlink_timesync.cpp`       | 时间同步                                   |
+   > | `mavlink_events.cpp`         | 事件相关消息处理                           |
+   > | `mavlink_command_sender.cpp` | MAVLink 命令发送相关功能                   |
+   > | `mavlink_messages.cpp`       | MAVLink 消息及数据流相关的辅助管理         |
+
+##### 结合项目，应该重点研究哪些部分
+
+目前负责 PX4 无人机控制开发和 QGC 数据显示，未来还需要传输无线供电设备的数据。
+
+建议按照下面的顺序研究，而不是把整个目录中的文件全部看一遍。
+
+| 优先级 | 源码                         | 研究目标                             |
+| ------ | ---------------------------- | ------------------------------------ |
+| 1      | `mavlink_main.cpp`           | 理解实例、通信链路和模块整体运行机制 |
+| 2      | `streams/`                   | 理解 PX4 如何向 QGC 发送数据         |
+| 3      | `mavlink_receiver.cpp`       | 理解 PX4 如何接收并处理 QGC 消息     |
+| 4      | `mavlink_messages.cpp`       | 理解消息与数据流的管理关系           |
+| 5      | `mavlink_command_sender.cpp` | 理解 PX4 如何发送 MAVLink 命令       |
+| 6      | `mavlink_mission.cpp`        | 理解航点任务传输机制                 |
+
+尤其是 `streams/`，我建议你下一步就从它入手。
+
+做一个小练习：
+
+在 PX4 工程根目录执行：
+
+```
+# 查看 Stream 目录
+ls src/modules/mavlink/streams
+
+# 搜索 ATTITUDE 对应的数据流实现
+grep -R -n "MavlinkStreamAttitude" \
+    src/modules/mavlink
+```
+
+找到对应文件后，重点观察三个问题：
+
+1. 它订阅了哪个 uORB Topic？
+2. 它在哪里构造 MAVLink 消息？
+3. 它通过什么接口把消息发送出去？
+
+当你真正理解这个过程后，就能把之前学习的 uORB、MAVLink XML、msgid、Payload、MAVLink 实例串联起来了。
+
+而且这条路线与你后续的无线供电数据开发直接相关：你可以参考现有 Stream 的实现方式，将无线供电模块发布的电压、电流、功率和效率数据通过自定义 MAVLink 消息发送到 QGC。
+
+
+
+
+
+1. 创建实例函数的返回值类型为类引用
+   1. 按值返回会额外调用赋值构造函数导致创建多个实例
+   2. 按地址返回可以修改实例指针指向的对象
+
+
+
