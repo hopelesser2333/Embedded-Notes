@@ -4,8 +4,8 @@
 
 ## 学习内容
 
-- [MAVLink 协议基础](./MAVLINK)
-- [MAVLink XML 结构和自定义](./MAVLInk XML 结构和自定义)
+- [MAVLink 协议基础](./MAVLink)
+- [MAVLink XML 结构和自定义](./MAVLink XML 结构和自定义)
 
 ## 笔记说明
 

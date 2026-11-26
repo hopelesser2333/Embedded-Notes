@@ -54,11 +54,11 @@ export default defineConfig({
                 },
                 {
                   text: 'MAVLink 协议与 PX4 外部通信',
-                  link: '/px4/mavlink/MAVLINK'
+                  link: '/px4/mavlink/MAVLink'
                 },
                 {
                   text: 'MAVLink 2 和 XML',
-                  link: '/px4/mavlink/MAVLInk XML 结构和自定义'
+                  link: '/px4/mavlink/MAVLink XML 结构和自定义'
                 }
               ]
             },
